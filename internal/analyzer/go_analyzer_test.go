@@ -17,7 +17,7 @@ import (
 func writeModule(t *testing.T, src string) string {
 	t.Helper()
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module testpkg\n\ngo 1.21\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/testpkg\n\ngo 1.21\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "p.go"), []byte(src), 0o644))
 	return dir
 }
@@ -26,7 +26,7 @@ func writeModule(t *testing.T, src string) string {
 func writeModuleMulti(t *testing.T, files map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module testpkg\n\ngo 1.21\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/testpkg\n\ngo 1.21\n"), 0o644))
 	for name, src := range files {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644))
 	}
@@ -150,4 +150,116 @@ func TestMultiFilePackage(t *testing.T) {
 
 func TestLanguage(t *testing.T) {
 	assert.Equal(t, "go", NewGoAnalyzer().Language())
+}
+
+func TestEdgeExtraction(t *testing.T) {
+	tests := []struct {
+		name      string
+		files     map[string]string
+		wantEdges []Edge
+	}{
+		{
+			name: "call-edge-function",
+			files: map[string]string{
+				"main.go": "package main\n\nfunc A() { B() }\nfunc B() {}\n",
+			},
+			wantEdges: []Edge{
+				{
+					FromID: NewNodeID("example.com/testpkg", "A", Function),
+					ToID:   NewNodeID("example.com/testpkg", "B", Function),
+					Kind:   Calls,
+				},
+			},
+		},
+		{
+			name: "call-edge-method",
+			files: map[string]string{
+				"main.go": "package main\n\ntype Svc struct{}\nfunc (s *Svc) Do() {}\nfunc Run(s *Svc) { s.Do() }\n",
+			},
+			wantEdges: []Edge{
+				{
+					FromID: NewNodeID("example.com/testpkg", "Run", Function),
+					ToID:   NewNodeID("example.com/testpkg", "(*Svc).Do", Method),
+					Kind:   Calls,
+				},
+			},
+		},
+		{
+			name: "call-edge-cross-file",
+			files: map[string]string{
+				"file1.go": "package main\n\nfunc Caller() { Callee() }\n",
+				"file2.go": "package main\n\nfunc Callee() {}\n",
+			},
+			wantEdges: []Edge{
+				{
+					FromID: NewNodeID("example.com/testpkg", "Caller", Function),
+					ToID:   NewNodeID("example.com/testpkg", "Callee", Function),
+					Kind:   Calls,
+				},
+			},
+		},
+		{
+			name: "implements-local-interface",
+			files: map[string]string{
+				"main.go": "package main\n\ntype Writer interface { Write([]byte) (int, error) }\ntype W struct{}\nfunc (W) Write(b []byte) (int, error) { return 0, nil }\n",
+			},
+			wantEdges: []Edge{
+				{
+					FromID: NewNodeID("example.com/testpkg", "W", Type),
+					ToID:   NewNodeID("example.com/testpkg", "Writer", Interface),
+					Kind:   Implements,
+				},
+			},
+		},
+		{
+			name: "no-stdlib-implements",
+			files: map[string]string{
+				"main.go": "package main\n\ntype R struct{}\nfunc (R) Read(p []byte) (int, error) { return 0, nil }\n",
+			},
+			wantEdges: []Edge{}, // R satisfies io.Reader but that's stdlib — no edge
+		},
+		{
+			name: "no-duplicate-edges",
+			files: map[string]string{
+				"main.go": "package main\n\nfunc A() { B(); B() }\nfunc B() {}\n",
+			},
+			wantEdges: []Edge{
+				{
+					FromID: NewNodeID("example.com/testpkg", "A", Function),
+					ToID:   NewNodeID("example.com/testpkg", "B", Function),
+					Kind:   Calls,
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := writeModuleMulti(t, tt.files)
+			a := NewGoAnalyzer()
+			result, err := a.Analyze(context.Background(), dir, []string{"./..."})
+			require.NoError(t, err)
+
+			for _, want := range tt.wantEdges {
+				assert.Contains(t, result.Edges, want)
+			}
+
+			if tt.name == "no-stdlib-implements" {
+				// No Implements edges should exist.
+				for _, e := range result.Edges {
+					assert.NotEqual(t, Implements, e.Kind, "unexpected Implements edge")
+				}
+			}
+
+			if tt.name == "no-duplicate-edges" {
+				// Exactly one Calls edge despite two calls to B().
+				var callEdges []Edge
+				for _, e := range result.Edges {
+					if e.Kind == Calls {
+						callEdges = append(callEdges, e)
+					}
+				}
+				assert.Len(t, callEdges, 1)
+			}
+		})
+	}
 }
