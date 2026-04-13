@@ -45,6 +45,7 @@ func NewStore(dbPath string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("graph: open database: %w", err)
 	}
+	db.SetMaxOpenConns(1) // SQLite supports one writer; prevent pool from opening concurrent connections
 
 	if err := db.Ping(); err != nil {
 		db.Close()
@@ -82,12 +83,17 @@ func createTables(db *sql.DB) error {
 			sha256 TEXT
 		)`,
 	}
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("graph: create tables: %w", err)
+	}
+	defer tx.Rollback()
 	for _, s := range stmts {
-		if _, err := db.Exec(s); err != nil {
+		if _, err := tx.Exec(s); err != nil {
 			return fmt.Errorf("graph: create tables: %w", err)
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 // Close closes the underlying database connection.
