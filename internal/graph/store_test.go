@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -214,4 +215,211 @@ func TestStats(t *testing.T) {
 	assert.Equal(t, 3, stats.NodeCount)
 	assert.Equal(t, 2, stats.EdgeCount)
 	assert.Equal(t, 1, stats.FileCount)
+}
+
+func TestChangedFiles(t *testing.T) {
+	tests := []struct {
+		name        string
+		seed        *analyzer.AnalysisResult
+		current     map[string]string
+		wantChanged []string
+		wantDeleted []string
+	}{
+		{
+			name:        "new-file-detected",
+			seed:        nil,
+			current:     map[string]string{"a.go": "abc123"},
+			wantChanged: []string{"a.go"},
+		},
+		{
+			name: "unchanged-file-skipped",
+			seed: &analyzer.AnalysisResult{
+				Files: []analyzer.FileInfo{{Path: "a.go", Package: "pkg", SHA256: "abc123"}},
+			},
+			current: map[string]string{"a.go": "abc123"},
+		},
+		{
+			name: "modified-file-detected",
+			seed: &analyzer.AnalysisResult{
+				Files: []analyzer.FileInfo{{Path: "a.go", Package: "pkg", SHA256: "abc123"}},
+			},
+			current:     map[string]string{"a.go": "def456"},
+			wantChanged: []string{"a.go"},
+		},
+		{
+			name: "deleted-file-detected",
+			seed: &analyzer.AnalysisResult{
+				Files: []analyzer.FileInfo{{Path: "a.go", Package: "pkg", SHA256: "abc123"}},
+			},
+			current:     map[string]string{},
+			wantDeleted: []string{"a.go"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTestStore(t)
+			if tt.seed != nil {
+				require.NoError(t, s.SaveAnalysis(tt.seed))
+			}
+
+			changed, deleted, err := s.ChangedFiles(tt.current)
+			require.NoError(t, err)
+			assert.ElementsMatch(t, tt.wantChanged, changed)
+			assert.ElementsMatch(t, tt.wantDeleted, deleted)
+		})
+	}
+}
+
+func TestChangedFiles_UpsertFlow(t *testing.T) {
+	s := newTestStore(t)
+
+	// Save a.go with hash "abc".
+	r1 := &analyzer.AnalysisResult{
+		Files: []analyzer.FileInfo{{Path: "a.go", Package: "pkg", SHA256: "abc"}},
+	}
+	require.NoError(t, s.SaveAnalysis(r1))
+
+	// Detect change.
+	changed, deleted, err := s.ChangedFiles(map[string]string{"a.go": "def"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a.go"}, changed)
+	assert.Empty(t, deleted)
+
+	// Re-save with updated hash.
+	r2 := &analyzer.AnalysisResult{
+		Files: []analyzer.FileInfo{{Path: "a.go", Package: "pkg", SHA256: "def"}},
+	}
+	require.NoError(t, s.SaveAnalysis(r2))
+
+	// No longer detected as changed.
+	changed, deleted, err = s.ChangedFiles(map[string]string{"a.go": "def"})
+	require.NoError(t, err)
+	assert.Empty(t, changed)
+	assert.Empty(t, deleted)
+}
+
+func TestDeleteFilesData(t *testing.T) {
+	t.Run("delete-cascades-nodes", func(t *testing.T) {
+		s := newTestStore(t)
+
+		nodeA := analyzer.NewNodeID("pkg", "FnA", analyzer.Function)
+		nodeB := analyzer.NewNodeID("pkg", "FnB", analyzer.Function)
+		result := &analyzer.AnalysisResult{
+			Nodes: []analyzer.Node{
+				{ID: nodeA, Name: "FnA", Kind: analyzer.Function, Package: "pkg", File: "a.go", StartLine: 1, EndLine: 5},
+				{ID: nodeB, Name: "FnB", Kind: analyzer.Function, Package: "pkg", File: "a.go", StartLine: 10, EndLine: 15},
+			},
+			Edges: []analyzer.Edge{
+				{FromID: nodeA, ToID: nodeB, Kind: analyzer.Calls},
+			},
+			Files: []analyzer.FileInfo{
+				{Path: "a.go", Package: "pkg", SHA256: "abc123"},
+			},
+		}
+		require.NoError(t, s.SaveAnalysis(result))
+
+		require.NoError(t, s.DeleteFilesData([]string{"a.go"}))
+
+		_, err := s.GetFile("a.go")
+		assert.ErrorIs(t, err, sql.ErrNoRows)
+
+		stats, err := s.Stats()
+		require.NoError(t, err)
+		assert.Equal(t, 0, stats.NodeCount)
+		assert.Equal(t, 0, stats.EdgeCount)
+		assert.Equal(t, 0, stats.FileCount)
+	})
+
+	t.Run("delete-preserves-other-files", func(t *testing.T) {
+		s := newTestStore(t)
+
+		nodeA := analyzer.NewNodeID("pkg", "FnA", analyzer.Function)
+		nodeB := analyzer.NewNodeID("pkg", "FnB", analyzer.Function)
+
+		resultA := &analyzer.AnalysisResult{
+			Nodes: []analyzer.Node{
+				{ID: nodeA, Name: "FnA", Kind: analyzer.Function, Package: "pkg", File: "a.go", StartLine: 1, EndLine: 5},
+			},
+			Files: []analyzer.FileInfo{{Path: "a.go", Package: "pkg", SHA256: "aaa"}},
+		}
+		resultB := &analyzer.AnalysisResult{
+			Nodes: []analyzer.Node{
+				{ID: nodeB, Name: "FnB", Kind: analyzer.Function, Package: "pkg", File: "b.go", StartLine: 1, EndLine: 5},
+			},
+			Files: []analyzer.FileInfo{{Path: "b.go", Package: "pkg", SHA256: "bbb"}},
+		}
+		require.NoError(t, s.SaveAnalysis(resultA))
+		require.NoError(t, s.SaveAnalysis(resultB))
+
+		require.NoError(t, s.DeleteFilesData([]string{"a.go"}))
+
+		// b.go data is intact.
+		f, err := s.GetFile("b.go")
+		require.NoError(t, err)
+		assert.Equal(t, "bbb", f.SHA256)
+
+		nodes, err := s.ListNodes(NodeFilter{File: "b.go"})
+		require.NoError(t, err)
+		assert.Len(t, nodes, 1)
+
+		// a.go data is gone.
+		_, err = s.GetFile("a.go")
+		assert.ErrorIs(t, err, sql.ErrNoRows)
+	})
+
+	t.Run("delete-empty-paths", func(t *testing.T) {
+		s := newTestStore(t)
+		result := &analyzer.AnalysisResult{
+			Files: []analyzer.FileInfo{{Path: "a.go", Package: "pkg", SHA256: "abc"}},
+		}
+		require.NoError(t, s.SaveAnalysis(result))
+
+		require.NoError(t, s.DeleteFilesData([]string{}))
+
+		// Data is still there.
+		f, err := s.GetFile("a.go")
+		require.NoError(t, err)
+		assert.Equal(t, "abc", f.SHA256)
+	})
+
+	t.Run("cross-file-edge-cascade", func(t *testing.T) {
+		s := newTestStore(t)
+
+		nodeA := analyzer.NewNodeID("pkg", "FnA", analyzer.Function)
+		nodeB := analyzer.NewNodeID("pkg", "FnB", analyzer.Function)
+
+		result := &analyzer.AnalysisResult{
+			Nodes: []analyzer.Node{
+				{ID: nodeA, Name: "FnA", Kind: analyzer.Function, Package: "pkg", File: "a.go", StartLine: 1, EndLine: 5},
+				{ID: nodeB, Name: "FnB", Kind: analyzer.Function, Package: "pkg", File: "b.go", StartLine: 1, EndLine: 5},
+			},
+			Edges: []analyzer.Edge{
+				{FromID: nodeA, ToID: nodeB, Kind: analyzer.Calls},
+			},
+			Files: []analyzer.FileInfo{
+				{Path: "a.go", Package: "pkg", SHA256: "aaa"},
+				{Path: "b.go", Package: "pkg", SHA256: "bbb"},
+			},
+		}
+		require.NoError(t, s.SaveAnalysis(result))
+
+		// Delete a.go — edge A→B should be removed (from_id references deleted node).
+		require.NoError(t, s.DeleteFilesData([]string{"a.go"}))
+
+		// Node B and file b.go survive.
+		_, err := s.GetNode(nodeB)
+		require.NoError(t, err)
+
+		f, err := s.GetFile("b.go")
+		require.NoError(t, err)
+		assert.Equal(t, "bbb", f.SHA256)
+
+		// Edge is gone.
+		stats, err := s.Stats()
+		require.NoError(t, err)
+		assert.Equal(t, 0, stats.EdgeCount)
+		assert.Equal(t, 1, stats.NodeCount)
+		assert.Equal(t, 1, stats.FileCount)
+	})
 }

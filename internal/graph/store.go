@@ -3,6 +3,8 @@ package graph
 import (
 	"database/sql"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/peter-stratton/quorum-review/internal/analyzer"
 	_ "modernc.org/sqlite"
@@ -251,6 +253,100 @@ func (s *Store) GetFile(path string) (*analyzer.FileInfo, error) {
 		return nil, fmt.Errorf("graph: get file %s: %w", path, err)
 	}
 	return &f, nil
+}
+
+// ChangedFiles compares the current on-disk file hashes against the stored
+// hashes and returns which files have changed or been deleted.
+// current maps file path → SHA-256 hash.
+func (s *Store) ChangedFiles(current map[string]string) (changed []string, deleted []string, err error) {
+	rows, err := s.db.Query(`SELECT path, sha256 FROM files`)
+	if err != nil {
+		return nil, nil, fmt.Errorf("graph: query file hashes: %w", err)
+	}
+	defer rows.Close()
+
+	stored := make(map[string]string)
+	for rows.Next() {
+		var path, hash string
+		if err := rows.Scan(&path, &hash); err != nil {
+			return nil, nil, fmt.Errorf("graph: query file hashes: scan: %w", err)
+		}
+		stored[path] = hash
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("graph: query file hashes: %w", err)
+	}
+
+	for path, hash := range current {
+		storedHash, exists := stored[path]
+		if !exists || storedHash != hash {
+			changed = append(changed, path)
+		}
+	}
+
+	for path := range stored {
+		if _, exists := current[path]; !exists {
+			deleted = append(deleted, path)
+		}
+	}
+
+	sort.Strings(changed)
+	sort.Strings(deleted)
+	return changed, deleted, nil
+}
+
+// DeleteFilesData removes all file, node, and edge rows associated with the
+// given file paths in a single transaction. Edges are deleted before nodes
+// because the edge query uses a subquery against the nodes table.
+func (s *Store) DeleteFilesData(paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+
+	ph := placeholders(len(paths))
+	args := toArgs(paths)
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("graph: delete files data: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Delete edges first — the subquery references nodes that will be deleted next.
+	edgeArgs := append(args, args...)
+	if _, err := tx.Exec(
+		`DELETE FROM edges WHERE from_id IN (SELECT id FROM nodes WHERE file IN (`+ph+`)) OR to_id IN (SELECT id FROM nodes WHERE file IN (`+ph+`))`,
+		edgeArgs...,
+	); err != nil {
+		return fmt.Errorf("graph: delete files data: edges: %w", err)
+	}
+
+	if _, err := tx.Exec(`DELETE FROM nodes WHERE file IN (`+ph+`)`, args...); err != nil {
+		return fmt.Errorf("graph: delete files data: nodes: %w", err)
+	}
+
+	if _, err := tx.Exec(`DELETE FROM files WHERE path IN (`+ph+`)`, args...); err != nil {
+		return fmt.Errorf("graph: delete files data: files: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("graph: delete files data: commit: %w", err)
+	}
+	return nil
+}
+
+// placeholders returns a comma-separated string of n question marks for SQL IN clauses.
+func placeholders(n int) string {
+	return strings.Repeat("?,", n-1) + "?"
+}
+
+// toArgs converts a string slice to an []any slice for use with database/sql.
+func toArgs(ss []string) []any {
+	args := make([]any, len(ss))
+	for i, s := range ss {
+		args[i] = s
+	}
+	return args
 }
 
 // Stats returns aggregate counts for nodes, edges, and files in the store.
