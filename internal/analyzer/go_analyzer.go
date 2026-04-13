@@ -8,7 +8,6 @@ import (
 	"go/ast"
 	"go/token"
 	"os"
-	"strings"
 
 	"golang.org/x/tools/go/packages"
 )
@@ -41,23 +40,20 @@ func (g *GoAnalyzer) Analyze(ctx context.Context, dir string, patterns []string)
 		return nil, fmt.Errorf("go analyzer: packages.Load: %w", err)
 	}
 
-	// Surface per-package errors even when the top-level call succeeds.
-	var pkgErrs []string
-	for _, pkg := range pkgs {
-		for _, e := range pkg.Errors {
-			pkgErrs = append(pkgErrs, e.Error())
-		}
-	}
-	if len(pkgErrs) > 0 {
-		return nil, fmt.Errorf("go analyzer: package errors: %s", strings.Join(pkgErrs, "; "))
-	}
-
 	var nodes []Node
+	var result AnalysisResult
 	seenFiles := make(map[string]bool)
 	var files []FileInfo
 
 	for _, pkg := range pkgs {
 		if pkg.Fset == nil {
+			continue
+		}
+
+		if len(pkg.Errors) > 0 {
+			for _, e := range pkg.Errors {
+				result.Errors = append(result.Errors, fmt.Sprintf("%s: %s", pkg.PkgPath, e))
+			}
 			continue
 		}
 
@@ -79,13 +75,14 @@ func (g *GoAnalyzer) Analyze(ctx context.Context, dir string, patterns []string)
 						if _, isIface := ts.Type.(*ast.InterfaceType); isIface {
 							kind = Interface
 						}
+						pos := pkg.Fset.Position(ts.Pos())
 						nodes = append(nodes, Node{
 							ID:        NewNodeID(pkg.PkgPath, ts.Name.Name, kind),
 							Name:      ts.Name.Name,
 							Kind:      kind,
 							Package:   pkg.PkgPath,
-							File:      pkg.Fset.Position(ts.Pos()).Filename,
-							StartLine: pkg.Fset.Position(ts.Pos()).Line,
+							File:      pos.Filename,
+							StartLine: pos.Line,
 							EndLine:   pkg.Fset.Position(ts.End()).Line,
 						})
 					}
@@ -113,7 +110,9 @@ func (g *GoAnalyzer) Analyze(ctx context.Context, dir string, patterns []string)
 		}
 	}
 
-	return &AnalysisResult{Nodes: nodes, Edges: nil, Files: files}, nil
+	result.Nodes = nodes
+	result.Files = files
+	return &result, nil
 }
 
 // extractFuncNode builds a Node from a function or method declaration.
@@ -126,13 +125,14 @@ func extractFuncNode(pkg *packages.Package, decl *ast.FuncDecl) Node {
 		name = receiverName(decl)
 	}
 
+	pos := pkg.Fset.Position(decl.Pos())
 	return Node{
 		ID:        NewNodeID(pkg.PkgPath, name, kind),
 		Name:      name,
 		Kind:      kind,
 		Package:   pkg.PkgPath,
-		File:      pkg.Fset.Position(decl.Pos()).Filename,
-		StartLine: pkg.Fset.Position(decl.Pos()).Line,
+		File:      pos.Filename,
+		StartLine: pos.Line,
 		EndLine:   pkg.Fset.Position(decl.End()).Line,
 	}
 }
