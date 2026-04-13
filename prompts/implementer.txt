@@ -1,0 +1,94 @@
+Read CLAUDE.md completely before doing anything else.
+Then implement GitHub issue #{{.IssueNumber}} in the {{.Repo}} repository.
+{{- if .ReconBrief}}
+
+## Pre-implementation context (recon brief)
+
+The following brief contains **verbatim code snippets** from key files gathered
+by the recon agent. These snippets are your primary reference — do NOT re-read
+files that are already quoted in the brief below. Only read additional files
+that the brief does not cover. This saves context for writing code.
+
+{{.ReconBrief}}
+{{- end}}
+{{- if .PlannerBrief}}
+
+## Plan
+
+The following plan was produced by the planner agent. Use it to guide your
+implementation — follow the approach, task breakdown, and key decisions unless
+you discover information that invalidates them.
+
+{{.PlannerBrief}}
+{{- end}}
+{{- if .ComposeServices}}
+
+## Available services
+
+The following services are available in the test environment:
+{{.ComposeServices}}
+{{- end}}
+
+Issue title: {{.IssueTitle}}
+Issue body:
+{{.IssueBody}}
+
+Before writing any code:
+1. Read the full issue body carefully, including any ## Test cases section
+{{- if .ArchitectureDocContent}}
+2. Respect the following dependency layer rules:
+{{.ArchitectureDocContent}}
+{{- end}}
+{{- if .ConventionsDocContent}}
+3. Follow the coding conventions below:
+{{.ConventionsDocContent}}
+{{- end}}
+4. Identify every file you expect to create or modify
+5. Post a brief implementation plan as a comment on the issue
+
+CRITICAL RULES:
+{{- if .BranchExists}}
+- Check out the existing feature branch: git fetch origin && git checkout {{.IssueNumber}}-{{.Slug}}
+{{- else if .BaseBranch}}
+- Create a feature branch: git fetch origin && git checkout -b {{.IssueNumber}}-{{.Slug}} origin/{{.BaseBranch}}
+{{- else}}
+- Create a feature branch: git checkout -b {{.IssueNumber}}-{{.Slug}}
+{{- end}}
+- Never commit directly to {{if .BaseBranch}}{{.BaseBranch}}{{else}}main{{end}}
+{{.SharedRules}}- Do NOT modify files in {{.ReviewDir}}
+{{- if .GeneratedPaths}}
+- Do NOT edit generated files directly ({{.GeneratedPaths}}); edit source files or re-run code generation instead
+{{- end}}
+
+Implementation steps:
+1. Write the implementation code{{if .ArchitectureDocContent}}, respecting the architecture layer rules above{{end}}
+2. Write unit tests alongside the implementation
+{{- if .BuildCommand}}
+3. Run build: {{.BuildCommand}}
+{{- end}}
+{{- if .TestCommand}}
+4. Run tests: {{.TestCommand}}
+{{- end}}
+5. Commit with message including "Closes #{{.IssueNumber}}"
+{{- if .BaseBranch}}
+6. Push the branch and open a pull request targeting {{.BaseBranch}}: gh pr create --base {{.BaseBranch}} ...
+{{- else}}
+6. Push the branch and open a pull request
+{{- end}}
+
+When opening the pull request, post a PR comment with the following format so
+the reviewer agent can find your notes:
+
+## Implementation Notes
+
+### Approach
+Describe what approach you took and why.
+
+### Key Decisions
+List any non-obvious decisions or trade-offs made during implementation.
+
+### Known Limitations
+Note anything incomplete, deferred, or that the reviewer should be aware of.
+
+### Architecture
+Describe which layers were touched and how dependencies were respected{{if .ArchitectureDocContent}} (per architecture rules above){{end}}.

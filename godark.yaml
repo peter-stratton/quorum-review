@@ -1,0 +1,106 @@
+# godark.yaml — Configuration for godark
+repo: "peter-stratton/quorum-review"  # GitHub repository (owner/repo)
+
+# Merge behavior — two-tier config:
+#   feature: controls how feature PRs are merged after both reviewers approve
+#     none     — label PR awaiting-human-review (default, safest)
+#     low_risk — auto-merge small/safe PRs, label others for human review
+#     all      — auto-merge everything
+#   rollup: controls rollup PR behavior (only relevant when base_branch ≠ default_branch)
+#     none   — godark stops after feature PRs; human opens and merges rollup PR
+#     manual — godark opens rollup PR; human reviews and merges
+#     auto   — godark opens and merges rollup PR
+auto_merge:
+  feature: none
+  rollup: none
+
+# Build, test, format, and lint commands (all optional)
+# build_command: ""  # run before the verify step
+# test_command: ""   # run by the verify step
+# format_command: "" # run during verify step
+# lint_command: ""   # run during verify step
+
+# Paths (defaults shown — override to customize)
+# roadmap_path: docs/roadmap/
+# planning_dir: docs/planning/
+# scenario_dir: tests/scenarios/
+
+# Patch coverage enforcement (optional)
+# When set, the verify step computes patch coverage after tests pass and fails
+# if the percentage of covered changed lines is below patch_target.
+# coverage:
+#   patch_target: 80          # 1-100, percentage of changed lines that must be covered
+#   test_command: ""           # optional override (must write -coverprofile=/tmp/cov.out)
+
+# Prompt templates (override by copying to a custom path)
+prompts:
+  implementer: prompts/implementer.txt
+  implementer_retry: prompts/implementer_retry.txt
+  reviewer: prompts/reviewer.txt
+  quality_reviewer: prompts/quality_reviewer.txt
+  spec_generator: prompts/spec_generator.txt
+  punchlist: prompts/punchlist.txt
+  verify_fix: prompts/verify_fix.txt
+  recon: prompts/recon.txt
+  planner: prompts/planner.txt
+  merge_coordinator: prompts/merge_coordinator.txt
+  reviewer_semiformal: prompts/reviewer_semiformal.txt
+
+# Default branch of the repository (auto-detected from GitHub if omitted)
+# default_branch: main
+
+# Bounded concurrency (optional, Phase 14)
+# Controls how many issues in a wave run in parallel. Default is 1
+# (serial behavior, identical to pre-Phase-14 godark). Set higher to
+# fan out independent issues across workers; dependent issues still
+# respect topological ordering via wave-barrier dispatch.
+#
+# Mutually exclusive with --integration on the CLI: an integration run
+# (which brings up docker_compose services) requires max_workers=1
+# because compose services are shared, host-side state. Pass
+# --workers N on the CLI to override this value per-run.
+# concurrency:
+#   max_workers: 1   # default; raise to fan out independent issues
+
+# Docker Compose integration (optional)
+# When set, godark can bring up compose services alongside the sandbox
+# for runs invoked with --integration. Concurrent runs (max_workers > 1)
+# skip compose because the services are shared host state and can't be
+# safely partitioned across parallel workers.
+# docker_compose:
+#   file: docker-compose.test.yml     # path to compose file (required)
+#   project_name: ""                  # optional prefix (auto-generated if empty)
+#   services:                         # optional: describe services for agent context
+#     - name: postgres
+#       description: "PostgreSQL 16 test database on port 5432"
+#     - name: redis
+#       description: "Redis 7 cache on port 6379"
+
+# Host services (optional)
+# Declare services running on the host that agents need to know about.
+# godark verifies health checks before processing but does not start/stop them.
+# host_services:
+#   - name: supabase
+#     description: "Supabase local stack (Postgres, Auth, Realtime, Studio)"
+#     health_check:
+#       command: "curl -sf http://localhost:54321/rest/v1/"
+#       timeout: "10s"
+#       retries: 5
+#   - name: wrangler
+#     description: "Cloudflare Workers local dev (R2, KV, DO)"
+#     health_check:
+#       command: "curl -sf http://localhost:8787/"
+
+# Agent timeout (Go duration format: "30m", "1h", etc.)
+# agent_timeout: "30m"
+
+# Model selection (default: sonnet via CLI)
+# model: opus
+# model_overrides:
+#   recon: sonnet
+#   quality_reviewer: sonnet
+#   spec_generator: sonnet
+
+# Customizable prefixes for branch names and GitHub labels (default: "godark")
+# branch_prefix: godark
+# label_prefix: godark

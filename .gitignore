@@ -1,0 +1,30 @@
+# Worktrees
+.worktrees/*
+.claude/worktrees/*
+
+# Binaries
+/quorum-review
+bin/
+*.exe
+
+# Go
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Logs
+logs/
+
+# Config with secrets
+*.local.yaml
+.env
+.env.*
+credentials.*
+*.pem
+*.key

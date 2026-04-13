@@ -1,0 +1,53 @@
+{
+  "layers": [
+    {
+      "name": "cmd",
+      "description": "CLI entry point using Cobra. Parses flags, wires dependencies, and delegates to internal packages. This is the composition root.",
+      "paths": ["cmd/"],
+      "may_depend_on": ["graph", "analyzer", "reviewer", "provider", "output", "config"],
+      "must_not_depend_on": []
+    },
+    {
+      "name": "reviewer",
+      "description": "Review orchestration layer. Implements the three-layer review pipeline (intent, structural, style), constructs prompts for each layer, fans out to multiple models in parallel, and aggregates results.",
+      "paths": ["internal/reviewer/"],
+      "may_depend_on": ["graph", "provider", "output", "config"],
+      "must_not_depend_on": ["cmd", "analyzer"]
+    },
+    {
+      "name": "graph",
+      "description": "Code graph data model, SQLite persistence, and blast-radius computation. Stores nodes (functions, types, interfaces) and edges (calls, interface satisfaction), and computes the scoped subgraph affected by a given diff.",
+      "paths": ["internal/graph/"],
+      "may_depend_on": ["analyzer"],
+      "must_not_depend_on": ["cmd", "reviewer", "provider", "output"]
+    },
+    {
+      "name": "analyzer",
+      "description": "Language-specific AST parsing. Uses go/ast and go/types to extract nodes and edges from Go source. Defines the LanguageAnalyzer interface for future language support (Rust, Elixir via Tree-sitter).",
+      "paths": ["internal/analyzer/"],
+      "may_depend_on": [],
+      "must_not_depend_on": ["cmd", "graph", "reviewer", "provider", "output", "config"]
+    },
+    {
+      "name": "provider",
+      "description": "LLM provider abstraction. Implements backends for Anthropic (Claude), Google (Gemini), and OpenAI (Codex/GPT). Handles authentication, API calls, rate limiting, and response parsing.",
+      "paths": ["internal/provider/"],
+      "may_depend_on": ["config"],
+      "must_not_depend_on": ["cmd", "graph", "analyzer", "reviewer", "output"]
+    },
+    {
+      "name": "output",
+      "description": "Structured review output formatting. Renders findings to terminal and generates markdown files. Groups findings by review layer and model.",
+      "paths": ["internal/output/"],
+      "may_depend_on": ["config"],
+      "must_not_depend_on": ["cmd", "graph", "analyzer", "reviewer", "provider"]
+    },
+    {
+      "name": "config",
+      "description": "Configuration loading and model registry. Reads CLI config files, manages provider credentials, and defines the model selection types.",
+      "paths": ["internal/config/"],
+      "may_depend_on": [],
+      "must_not_depend_on": ["cmd", "graph", "analyzer", "reviewer", "provider", "output"]
+    }
+  ]
+}

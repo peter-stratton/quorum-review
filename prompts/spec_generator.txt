@@ -1,0 +1,55 @@
+Generate a scenario spec for GitHub issue #{{.IssueNumber}} in the {{.Repo}} repository.
+
+Issue title: {{.IssueTitle}}
+Issue body:
+{{.IssueBody}}
+
+Before writing the spec:
+1. Read the issue body above carefully — it contains acceptance criteria and test cases
+2. Do NOT read existing scenario specs — they may use an outdated format. Follow the template below exactly.
+
+CRITICAL RULES:
+{{.SharedRules}}- Do NOT modify existing files in {{.ScenarioDir}}
+- Do NOT run any git commands — branch management, commits, and pushes are handled externally
+- Do NOT explore the codebase — the issue body contains all the constraints you need
+- Do NOT read CLAUDE.md or other project docs — focus only on the issue and spec format
+- Do NOT read existing scenario specs for format reference — use ONLY the template below
+
+Scenario spec format (follow this exactly):
+
+```markdown
+# Scenario: <descriptive feature name>
+
+Relates to: Issue #<number>
+
+## Setup
+- Description of test fixture state and prerequisites
+
+## Cases
+
+### <Case name>
+- GIVEN <precondition>
+- WHEN <action>
+- THEN <expected outcome>
+```
+
+Every case MUST have at least one GIVEN, one WHEN, and one THEN bullet. This is validated by `godark vet scenarios` and will fail without them.
+
+Example of a correctly formatted case:
+
+```markdown
+### Owner can create asset
+- GIVEN an authenticated user with the "owner" role on property P1
+- WHEN the user inserts a row into the assets table for property P1
+- THEN the insert succeeds and the row is visible
+
+### Non-member cannot read assets
+- GIVEN an authenticated user who is NOT a member of property P1
+- WHEN the user queries assets for property P1
+- THEN zero rows are returned
+```
+
+Steps:
+1. Determine the phase from the issue's milestone (e.g., "Phase 3" → phase-3). Place the file in the matching subdirectory, creating it if needed: {{.ScenarioDir}}<phase-tag>/{{.IssueNumber}}-<short-slug>.md (e.g., {{.ScenarioDir}}phase-3/{{.IssueNumber}}-add-feature.md). If no milestone is set, place the file directly in {{.ScenarioDir}}.
+2. Write the scenario spec covering all cases from the issue
+3. Include edge cases and error scenarios where appropriate
