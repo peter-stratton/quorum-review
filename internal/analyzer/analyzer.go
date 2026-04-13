@@ -25,6 +25,7 @@ type LanguageAnalyzer interface {
 // invalidates all previously generated node IDs.
 func NewNodeID(pkg, name string, kind NodeKind) string {
 	h := sha256.New()
+	// sha256 writers never return an error; discard is safe.
 	fmt.Fprintf(h, "%s\x00%s\x00%s", pkg, name, kind.String())
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
