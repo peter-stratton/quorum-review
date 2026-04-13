@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
+	"go/types"
 	"os"
+	"strings"
 
 	"golang.org/x/tools/go/packages"
 )
@@ -26,8 +28,40 @@ func NewGoAnalyzer() *GoAnalyzer {
 // Language returns "go".
 func (g *GoAnalyzer) Language() string { return "go" }
 
+// isStdlib returns true if pkgPath belongs to the Go standard library.
+// Stdlib packages have no dot in the first path segment (e.g., "io", "fmt"),
+// while module paths always do (e.g., "github.com/...").
+func isStdlib(pkgPath string) bool {
+	return !strings.Contains(strings.SplitN(pkgPath, "/", 2)[0], ".")
+}
+
+// typesMethodName constructs a method name from a *types.Func in the same
+// format as receiverName: (*T).Method or (T).Method. Returns fn.Name() for
+// plain functions (no receiver).
+func typesMethodName(fn *types.Func) (string, NodeKind) {
+	sig := fn.Type().(*types.Signature)
+	recv := sig.Recv()
+	if recv == nil {
+		return fn.Name(), Function
+	}
+	t := recv.Type()
+	if ptr, ok := t.(*types.Pointer); ok {
+		named := ptr.Elem().(*types.Named)
+		return fmt.Sprintf("(*%s).%s", named.Obj().Name(), fn.Name()), Method
+	}
+	named := t.(*types.Named)
+	return fmt.Sprintf("(%s).%s", named.Obj().Name(), fn.Name()), Method
+}
+
+// edgeKey is the deduplication key for edges.
+type edgeKey struct {
+	from string
+	to   string
+	kind EdgeKind
+}
+
 // Analyze parses Go source files under dir matching patterns and returns the
-// extracted nodes. Edge extraction is not yet implemented (Edges will be nil).
+// extracted nodes and edges.
 func (g *GoAnalyzer) Analyze(ctx context.Context, dir string, patterns []string) (*AnalysisResult, error) {
 	cfg := &packages.Config{
 		Mode: packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo |
@@ -112,6 +146,159 @@ func (g *GoAnalyzer) Analyze(ctx context.Context, dir string, patterns []string)
 
 	result.Nodes = nodes
 	result.Files = files
+
+	// Build node ID lookup for edge validation.
+	nodeIDs := make(map[string]bool, len(nodes))
+	for _, n := range nodes {
+		nodeIDs[n.ID] = true
+	}
+
+	// Edge extraction: call edges and interface satisfaction.
+	var edges []Edge
+	seen := make(map[edgeKey]bool)
+
+	addEdge := func(fromID, toID string, kind EdgeKind) {
+		k := edgeKey{fromID, toID, kind}
+		if !seen[k] {
+			seen[k] = true
+			edges = append(edges, Edge{FromID: fromID, ToID: toID, Kind: kind})
+		}
+	}
+
+	// Pass 2a: Call edges.
+	for _, pkg := range pkgs {
+		if len(pkg.Errors) > 0 || pkg.TypesInfo == nil {
+			continue
+		}
+		for _, file := range pkg.Syntax {
+			var cachedFromID string
+			var cachedFromValid bool
+			var enclosingFunc *ast.FuncDecl
+			var depth int
+			var funcDeclDepth = -1
+			ast.Inspect(file, func(n ast.Node) bool {
+				if n == nil {
+					depth--
+					if depth == funcDeclDepth {
+						enclosingFunc = nil
+						cachedFromID = ""
+						cachedFromValid = false
+						funcDeclDepth = -1
+					}
+					return false
+				}
+				// Track enclosing FuncDecl and cache its fromID.
+				if fd, ok := n.(*ast.FuncDecl); ok {
+					funcDeclDepth = depth
+					enclosingFunc = fd
+					fromNode := extractFuncNode(pkg, fd)
+					cachedFromID = fromNode.ID
+					cachedFromValid = nodeIDs[fromNode.ID]
+				}
+				depth++
+
+				ce, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				if enclosingFunc == nil || !cachedFromValid {
+					return true
+				}
+
+				var calleeFn *types.Func
+
+				switch fun := ce.Fun.(type) {
+				case *ast.Ident:
+					// Direct call: B()
+					obj := pkg.TypesInfo.Uses[fun]
+					if fn, ok := obj.(*types.Func); ok {
+						calleeFn = fn
+					}
+				case *ast.SelectorExpr:
+					// Method call: s.Do() or qualified call: pkg.Func()
+					if sel, ok := pkg.TypesInfo.Selections[fun]; ok {
+						if fn, ok := sel.Obj().(*types.Func); ok {
+							calleeFn = fn
+						}
+					} else {
+						// Qualified package-level call.
+						obj := pkg.TypesInfo.Uses[fun.Sel]
+						if fn, ok := obj.(*types.Func); ok {
+							calleeFn = fn
+						}
+					}
+				}
+
+				if calleeFn == nil || calleeFn.Pkg() == nil {
+					return true
+				}
+
+				calleeName, calleeKind := typesMethodName(calleeFn)
+				toID := NewNodeID(calleeFn.Pkg().Path(), calleeName, calleeKind)
+				if !nodeIDs[toID] {
+					return true
+				}
+
+				addEdge(cachedFromID, toID, Calls)
+				return true
+			})
+		}
+	}
+
+	// Pass 2b: Interface satisfaction edges.
+	type ifaceEntry struct {
+		obj  *types.TypeName
+		iface *types.Interface
+	}
+	type concreteEntry struct {
+		obj *types.TypeName
+	}
+
+	var ifaces []ifaceEntry
+	var concretes []concreteEntry
+
+	for _, pkg := range pkgs {
+		if len(pkg.Errors) > 0 || pkg.Types == nil {
+			continue
+		}
+		scope := pkg.Types.Scope()
+		for _, name := range scope.Names() {
+			obj, ok := scope.Lookup(name).(*types.TypeName)
+			if !ok {
+				continue
+			}
+			if iface, ok := obj.Type().Underlying().(*types.Interface); ok {
+				// Skip stdlib interfaces.
+				if obj.Pkg() == nil || isStdlib(obj.Pkg().Path()) {
+					continue
+				}
+				// Skip empty interfaces.
+				if iface.NumMethods() == 0 {
+					continue
+				}
+				ifaces = append(ifaces, ifaceEntry{obj, iface})
+			} else {
+				concretes = append(concretes, concreteEntry{obj})
+			}
+		}
+	}
+
+	for _, c := range concretes {
+		for _, iface := range ifaces {
+			valueSatisfies := types.Implements(c.obj.Type(), iface.iface)
+			ptrSatisfies := types.Implements(types.NewPointer(c.obj.Type()), iface.iface)
+			if !valueSatisfies && !ptrSatisfies {
+				continue
+			}
+			fromID := NewNodeID(c.obj.Pkg().Path(), c.obj.Name(), Type)
+			toID := NewNodeID(iface.obj.Pkg().Path(), iface.obj.Name(), Interface)
+			if nodeIDs[fromID] && nodeIDs[toID] {
+				addEdge(fromID, toID, Implements)
+			}
+		}
+	}
+
+	result.Edges = edges
 	return &result, nil
 }
 
