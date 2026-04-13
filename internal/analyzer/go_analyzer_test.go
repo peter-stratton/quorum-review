@@ -152,11 +152,16 @@ func TestLanguage(t *testing.T) {
 	assert.Equal(t, "go", NewGoAnalyzer().Language())
 }
 
+func edgeKindPtr(k EdgeKind) *EdgeKind { return &k }
+func intPtr(n int) *int                { return &n }
+
 func TestEdgeExtraction(t *testing.T) {
 	tests := []struct {
-		name      string
-		files     map[string]string
-		wantEdges []Edge
+		name            string
+		files           map[string]string
+		wantEdges       []Edge
+		wantNoEdgeKind  *EdgeKind // if set, assert no edge of this kind exists
+		wantCallEdgeLen *int      // if set, assert exact number of Calls edges
 	}{
 		{
 			name: "call-edge-function",
@@ -216,7 +221,8 @@ func TestEdgeExtraction(t *testing.T) {
 			files: map[string]string{
 				"main.go": "package main\n\ntype R struct{}\nfunc (R) Read(p []byte) (int, error) { return 0, nil }\n",
 			},
-			wantEdges: []Edge{}, // R satisfies io.Reader but that's stdlib — no edge
+			wantEdges:      []Edge{}, // R satisfies io.Reader but that's stdlib — no edge
+			wantNoEdgeKind: edgeKindPtr(Implements),
 		},
 		{
 			name: "no-duplicate-edges",
@@ -230,6 +236,7 @@ func TestEdgeExtraction(t *testing.T) {
 					Kind:   Calls,
 				},
 			},
+			wantCallEdgeLen: intPtr(1),
 		},
 	}
 	for _, tt := range tests {
@@ -243,22 +250,20 @@ func TestEdgeExtraction(t *testing.T) {
 				assert.Contains(t, result.Edges, want)
 			}
 
-			if tt.name == "no-stdlib-implements" {
-				// No Implements edges should exist.
+			if tt.wantNoEdgeKind != nil {
 				for _, e := range result.Edges {
-					assert.NotEqual(t, Implements, e.Kind, "unexpected Implements edge")
+					assert.NotEqual(t, *tt.wantNoEdgeKind, e.Kind, "unexpected %s edge", *tt.wantNoEdgeKind)
 				}
 			}
 
-			if tt.name == "no-duplicate-edges" {
-				// Exactly one Calls edge despite two calls to B().
+			if tt.wantCallEdgeLen != nil {
 				var callEdges []Edge
 				for _, e := range result.Edges {
 					if e.Kind == Calls {
 						callEdges = append(callEdges, e)
 					}
 				}
-				assert.Len(t, callEdges, 1)
+				assert.Len(t, callEdges, *tt.wantCallEdgeLen)
 			}
 		})
 	}

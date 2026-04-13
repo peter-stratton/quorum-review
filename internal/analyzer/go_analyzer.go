@@ -171,21 +171,26 @@ func (g *GoAnalyzer) Analyze(ctx context.Context, dir string, patterns []string)
 			continue
 		}
 		for _, file := range pkg.Syntax {
+			var cachedFromID string
+			var cachedFromValid bool
 			var enclosingFunc *ast.FuncDecl
 			ast.Inspect(file, func(n ast.Node) bool {
 				if n == nil {
 					return false
 				}
-				// Track enclosing FuncDecl.
+				// Track enclosing FuncDecl and cache its fromID.
 				if fd, ok := n.(*ast.FuncDecl); ok {
 					enclosingFunc = fd
+					fromNode := extractFuncNode(pkg, fd)
+					cachedFromID = fromNode.ID
+					cachedFromValid = nodeIDs[fromNode.ID]
 				}
 
 				ce, ok := n.(*ast.CallExpr)
 				if !ok {
 					return true
 				}
-				if enclosingFunc == nil {
+				if enclosingFunc == nil || !cachedFromValid {
 					return true
 				}
 
@@ -223,13 +228,7 @@ func (g *GoAnalyzer) Analyze(ctx context.Context, dir string, patterns []string)
 					return true
 				}
 
-				// Build fromID from enclosing FuncDecl.
-				fromNode := extractFuncNode(pkg, enclosingFunc)
-				if !nodeIDs[fromNode.ID] {
-					return true
-				}
-
-				addEdge(fromNode.ID, toID, Calls)
+				addEdge(cachedFromID, toID, Calls)
 				return true
 			})
 		}
