@@ -174,17 +174,28 @@ func (g *GoAnalyzer) Analyze(ctx context.Context, dir string, patterns []string)
 			var cachedFromID string
 			var cachedFromValid bool
 			var enclosingFunc *ast.FuncDecl
+			var depth int
+			var funcDeclDepth = -1
 			ast.Inspect(file, func(n ast.Node) bool {
 				if n == nil {
+					depth--
+					if depth == funcDeclDepth {
+						enclosingFunc = nil
+						cachedFromID = ""
+						cachedFromValid = false
+						funcDeclDepth = -1
+					}
 					return false
 				}
 				// Track enclosing FuncDecl and cache its fromID.
 				if fd, ok := n.(*ast.FuncDecl); ok {
+					funcDeclDepth = depth
 					enclosingFunc = fd
 					fromNode := extractFuncNode(pkg, fd)
 					cachedFromID = fromNode.ID
 					cachedFromValid = nodeIDs[fromNode.ID]
 				}
+				depth++
 
 				ce, ok := n.(*ast.CallExpr)
 				if !ok {

@@ -238,6 +238,14 @@ func TestEdgeExtraction(t *testing.T) {
 			},
 			wantCallEdgeLen: intPtr(1),
 		},
+		{
+			name: "no-false-edge-from-pkg-level-init",
+			files: map[string]string{
+				"main.go": "package main\n\nfunc Setup() {}\nfunc newDB() int { return 0 }\nvar defaultDB = newDB()\n",
+			},
+			wantEdges:       []Edge{}, // newDB() is called at package level, not from Setup
+			wantCallEdgeLen: intPtr(0),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
