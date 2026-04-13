@@ -75,7 +75,8 @@ type FileInfo struct {
 
 // AnalysisResult is the output of a LanguageAnalyzer.Analyze call.
 type AnalysisResult struct {
-	Nodes []Node
-	Edges []Edge
-	Files []FileInfo
+	Nodes  []Node
+	Edges  []Edge
+	Files  []FileInfo
+	Errors []string
 }
