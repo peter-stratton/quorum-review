@@ -204,6 +204,8 @@ func TestHashFiles(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "testdata", "fix.go"), []byte("package fix\n"), 0o644))
 
 	// Enable debug logging so hashFiles doesn't panic on short hashes.
+	prev := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(prev) })
 	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
 	hashes, err := hashFiles(dir)
@@ -274,6 +276,8 @@ func TestHashFiles_SkipsVendorAndTestdata(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "testdata"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "testdata", "golden.go"), []byte("package golden\n"), 0o644))
 
+	prev := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(prev) })
 	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
 	hashes, err := hashFiles(dir)

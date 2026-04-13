@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"crypto/sha256"
 	"fmt"
 	"io"
@@ -50,7 +49,11 @@ func runBuild(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("build: open store: %w", err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			slog.Error("build: close store", "err", err)
+		}
+	}()
 
 	hashes, err := hashFiles(absDir)
 	if err != nil {
@@ -85,13 +88,18 @@ func runBuild(cmd *cobra.Command, args []string) error {
 			if err != nil {
 				rel = f
 			}
-			patterns = append(patterns, "./"+filepath.ToSlash(filepath.Dir(rel))+"/...")
+			pkgDir := filepath.ToSlash(filepath.Dir(rel))
+			if pkgDir == "." {
+				patterns = append(patterns, "./...")
+			} else {
+				patterns = append(patterns, "./"+pkgDir+"/...")
+			}
 		}
 		patterns = dedupPatterns(patterns)
 	}
 
 	a := analyzer.NewGoAnalyzer()
-	result, err := a.Analyze(context.Background(), absDir, patterns)
+	result, err := a.Analyze(cmd.Context(), absDir, patterns)
 	if err != nil {
 		return fmt.Errorf("build: analyze: %w", err)
 	}
